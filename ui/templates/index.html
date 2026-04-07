@@ -4,7 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CodeMap UI</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260406i" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260407a" />
+  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
   <script>
     // Apply theme IMMEDIATELY on page load, before rendering
     (function() {
@@ -194,6 +197,7 @@
         <button id="tab-details" class="tab-btn active" type="button">Details</button>
         <button id="tab-impact" class="tab-btn" type="button">Impact</button>
         <button id="tab-graph" class="tab-btn" type="button">Graph</button>
+        <button id="tab-map" class="tab-btn" type="button">Map</button>
         <button id="tab-architecture" class="tab-btn" type="button">Architecture</button>
       </div>
       <div id="graph-controls" class="graph-controls hidden">
@@ -201,6 +205,7 @@
           <select id="graph-mode">
             <option value="symbol" selected>Symbol map</option>
             <option value="file">File map</option>
+            <option value="repo">Repo map</option>
           </select>
         </label>
         <label>How far to trace
@@ -213,6 +218,13 @@
         <label><input id="graph-hide-builtins" type="checkbox" checked /> Hide Python builtins</label>
         <label><input id="graph-hide-external" type="checkbox" checked /> Hide external packages</label>
         <input id="graph-search" type="text" placeholder="Search graph nodes or labels..." />
+        <div class="graph-actions">
+          <button id="graph-zoom-in" class="repo-btn" type="button" title="Zoom in">+</button>
+          <button id="graph-zoom-out" class="repo-btn" type="button" title="Zoom out">-</button>
+          <button id="graph-fit" class="repo-btn" type="button" title="Fit graph">Fit</button>
+          <button id="graph-reset" class="repo-btn" type="button" title="Reset layout">Reset</button>
+          <button id="graph-fullscreen" class="repo-btn" type="button" title="Toggle fullscreen">Fullscreen</button>
+        </div>
       </div>
       <div id="impact-controls" class="graph-controls hidden">
         <label>How far to trace
@@ -234,7 +246,20 @@
       </div>
       <div id="symbol-view" class="content muted">Select a symbol to view summary and usages.</div>
       <div id="impact-view" class="content muted hidden">Select a symbol to see what may be affected if you change it.</div>
-      <div id="graph-view" class="content muted hidden">Select a symbol to see its connection map.</div>
+      <div id="graph-view" class="content muted hidden">
+        <div class="graph-shell">
+          <div class="graph-meta">Select a symbol to see its connection map.</div>
+          <div id="graph-canvas" class="graph-canvas"></div>
+          <div id="graph-tooltip" class="graph-tooltip hidden"></div>
+        </div>
+      </div>
+      <div id="map-view" class="content muted hidden">
+        <div class="graph-shell">
+          <div class="graph-meta">Repo map shows file-level dependencies across your project.</div>
+          <div id="map-canvas" class="graph-canvas"></div>
+          <div id="map-tooltip" class="graph-tooltip hidden"></div>
+        </div>
+      </div>
       <div id="architecture-view" class="content muted hidden">Select a repository to view architecture insights.</div>
     </section>
   </main>
@@ -270,8 +295,7 @@
   <script>
     window.CODEMAP_DEFAULT_REPO = "{{ default_repo }}";
   </script>
-  <script src="/static/app.js?v=20260406i"></script>
+  <script src="/static/app.js?v=20260407a"></script>
 </body>
 </html>
-
 

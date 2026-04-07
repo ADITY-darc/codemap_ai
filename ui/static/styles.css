@@ -252,6 +252,13 @@ body {
   box-shadow: 0 6px 18px rgba(15, 138, 134, 0.08);
 }
 
+#tab-map.active {
+  background: linear-gradient(180deg, var(--graph-soft) 0%, #ffffff 100%);
+  border-color: var(--graph-border);
+  color: var(--graph-accent);
+  box-shadow: 0 6px 18px rgba(15, 138, 134, 0.08);
+}
+
 #tab-architecture.active {
   background: linear-gradient(180deg, var(--architecture-soft) 0%, #ffffff 100%);
   border-color: var(--architecture-border);
@@ -274,6 +281,44 @@ body {
   padding: 4px 8px;
   font-size: 12px;
   background: #fff;
+}
+
+.graph-actions {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.graph-shell {
+  position: relative;
+}
+
+.graph-meta {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.graph-canvas {
+  width: 100%;
+  min-height: 520px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.graph-tooltip {
+  position: absolute;
+  z-index: 8;
+  max-width: 320px;
+  font-size: 11px;
+  line-height: 1.35;
+  background: rgba(15, 23, 42, 0.92);
+  color: #fff;
+  border-radius: 8px;
+  padding: 6px 8px;
+  pointer-events: none;
 }
 
 .tree ul {
@@ -1710,6 +1755,18 @@ body.dark-theme .impact-file-row {
   background: var(--panel);
   color: var(--text);
   border-color: var(--line);
+}
+
+html.dark-theme .graph-canvas,
+body.dark-theme .graph-canvas {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+html.dark-theme .graph-tooltip,
+body.dark-theme .graph-tooltip {
+  background: rgba(2, 6, 23, 0.95);
+  border: 1px solid #334155;
 }
 
 html.dark-theme .impact-stat-card,
