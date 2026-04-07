@@ -18,6 +18,7 @@
   const tabDetailsEl = document.getElementById("tab-details");
   const tabImpactEl = document.getElementById("tab-impact");
   const tabGraphEl = document.getElementById("tab-graph");
+  const tabMapEl = document.getElementById("tab-map");
   const tabArchitectureEl = document.getElementById("tab-architecture");
   const graphControlsEl = document.getElementById("graph-controls");
   const impactControlsEl = document.getElementById("impact-controls");
@@ -25,12 +26,22 @@
   const impactMaxNodesEl = document.getElementById("impact-max-nodes");
   const impactViewEl = document.getElementById("impact-view");
   const graphViewEl = document.getElementById("graph-view");
+  const mapViewEl = document.getElementById("map-view");
   const architectureViewEl = document.getElementById("architecture-view");
   const graphModeEl = document.getElementById("graph-mode");
   const graphDepthEl = document.getElementById("graph-depth");
   const graphHideBuiltinsEl = document.getElementById("graph-hide-builtins");
   const graphHideExternalEl = document.getElementById("graph-hide-external");
   const graphSearchEl = document.getElementById("graph-search");
+  const graphZoomInEl = document.getElementById("graph-zoom-in");
+  const graphZoomOutEl = document.getElementById("graph-zoom-out");
+  const graphFitEl = document.getElementById("graph-fit");
+  const graphResetEl = document.getElementById("graph-reset");
+  const graphFullscreenEl = document.getElementById("graph-fullscreen");
+  const graphCanvasEl = document.getElementById("graph-canvas");
+  const mapCanvasEl = document.getElementById("map-canvas");
+  const graphTooltipEl = document.getElementById("graph-tooltip");
+  const mapTooltipEl = document.getElementById("map-tooltip");
   const recentSymbolsEl = document.getElementById("recent-symbols");
   const recentFilesEl = document.getElementById("recent-files");
   const recentSymbolsWrapEl = document.getElementById("recent-symbols-wrap");
@@ -108,9 +119,12 @@
   let tabsLoaded = {
     details: true,    // Details tab loads on symbol selection
     graph: false,     // Lazy load when clicked
+    map: false,       // Lazy load when clicked
     impact: false,    // Lazy load when clicked
     architecture: false  // Lazy load when clicked
   };
+  let graphCy = null;
+  let mapCy = null;
   
   let repoSummary = null;
   let repoSummaryUpdatedAt = "";
@@ -427,11 +441,15 @@
     symbolViewEl.classList.add("muted");
     impactViewEl.classList.add("muted");
     graphViewEl.classList.add("muted");
+    if (mapViewEl) mapViewEl.classList.add("muted");
     architectureViewEl.classList.add("muted");
     fileViewEl.textContent = message || "Select a file from the tree.";
     symbolViewEl.textContent = "Select a symbol to view summary and usages.";
     impactViewEl.textContent = "Select a symbol to see what may be affected if you change it.";
-    graphViewEl.textContent = "Select a symbol to see its connection map.";
+    const graphMeta = graphViewEl.querySelector(".graph-meta");
+    if (graphMeta) graphMeta.textContent = "Select a symbol to see its connection map.";
+    const mapMeta = mapViewEl ? mapViewEl.querySelector(".graph-meta") : null;
+    if (mapMeta) mapMeta.textContent = "Repo map shows file-level dependencies across your project.";
     architectureViewEl.textContent = "Select a repository to view architecture insights.";
     closeImpactPreview(false);
     recentSymbols = [];
@@ -526,10 +544,12 @@
     symbolViewEl.classList.remove("muted");
     impactViewEl.classList.remove("muted");
     graphViewEl.classList.remove("muted");
+    if (mapViewEl) mapViewEl.classList.remove("muted");
     fileViewEl.innerHTML = cta;
     symbolViewEl.innerHTML = cta;
     impactViewEl.innerHTML = cta;
     graphViewEl.innerHTML = cta;
+    if (mapViewEl) mapViewEl.innerHTML = cta;
     bindRunAnalysisNowButton();
   }
 
@@ -575,24 +595,32 @@
   }
 
   function setActiveTab(tab) {
-    activeTab = tab === "graph" || tab === "architecture" || tab === "impact" ? tab : "details";
+    activeTab = tab === "graph" || tab === "map" || tab === "architecture" || tab === "impact" ? tab : "details";
     const isImpact = activeTab === "impact";
     const isGraph = activeTab === "graph";
+    const isMap = activeTab === "map";
     const isArchitecture = activeTab === "architecture";
     
     // Update tab button states
     if (tabDetailsEl) tabDetailsEl.classList.toggle("active", activeTab === "details");
     if (tabImpactEl) tabImpactEl.classList.toggle("active", isImpact);
     if (tabGraphEl) tabGraphEl.classList.toggle("active", isGraph);
+    if (tabMapEl) tabMapEl.classList.toggle("active", isMap);
     if (tabArchitectureEl) tabArchitectureEl.classList.toggle("active", isArchitecture);
     
     // Show/hide tab content
     if (symbolViewEl) symbolViewEl.classList.toggle("hidden", activeTab !== "details");
     if (impactViewEl) impactViewEl.classList.toggle("hidden", !isImpact);
     if (graphViewEl) graphViewEl.classList.toggle("hidden", !isGraph);
+    if (mapViewEl) mapViewEl.classList.toggle("hidden", !isMap);
     if (architectureViewEl) architectureViewEl.classList.toggle("hidden", !isArchitecture);
-    if (graphControlsEl) graphControlsEl.classList.toggle("hidden", !isGraph);
+    if (graphControlsEl) graphControlsEl.classList.toggle("hidden", !(isGraph || isMap));
     if (impactControlsEl) impactControlsEl.classList.toggle("hidden", !isImpact);
+    if (graphModeEl) {
+      graphModeEl.disabled = isMap;
+      if (isMap) graphModeEl.value = "repo";
+      if (isGraph && graphModeEl.value === "repo") graphModeEl.value = "symbol";
+    }
     
     // Lazy loading: Only load data if not already loaded
     // This prevents repeated API calls and speed up tab switching
@@ -603,6 +631,13 @@
     } else if (isGraph && tabsLoaded.graph) {
       // Already loaded, just make sure content is visible
       if (graphViewEl) graphViewEl.classList.remove("hidden");
+    }
+    if (isMap && !tabsLoaded.map) {
+      showLoadingIndicator(mapViewEl, "Loading repository map...");
+      loadMap();
+      tabsLoaded.map = true;
+    } else if (isMap && tabsLoaded.map) {
+      if (mapViewEl) mapViewEl.classList.remove("hidden");
     }
     
     if (isImpact && !tabsLoaded.impact) {
@@ -1133,93 +1168,250 @@
     return items.slice(0, 200).map(renderer).join("");
   }
 
-  function renderGraphData(data) {
-    const p = graphParams();
-    const nodes = (data.nodes || []).slice();
-    const edges = (data.edges || []).slice();
-    const byId = new Map(nodes.map((n) => [n.id, n]));
+  function destroyGraphInstance(kind) {
+    const inst = kind === "map" ? mapCy : graphCy;
+    if (inst && typeof inst.destroy === "function") inst.destroy();
+    if (kind === "map") mapCy = null;
+    else graphCy = null;
+  }
+
+  function activeGraphInstance() {
+    if (activeTab === "map") return mapCy;
+    return graphCy;
+  }
+
+  function graphContainer(kind) {
+    return kind === "map" ? document.getElementById("map-canvas") : document.getElementById("graph-canvas");
+  }
+
+  function graphTooltip(kind) {
+    return kind === "map" ? document.getElementById("map-tooltip") : document.getElementById("graph-tooltip");
+  }
+
+  function graphViewElement(kind) {
+    return kind === "map" ? mapViewEl : graphViewEl;
+  }
+
+  function normalizeGraphNodeType(node, mode) {
+    if (mode === "file") return "file";
+    const parts = String(node.id || "").split(".");
+    const last = parts[parts.length - 1] || "";
+    if (last && /^[A-Z]/.test(last)) return "class";
+    return "function";
+  }
+
+  function computeGraphRoles(data) {
     const center = data.center || activeSymbolFqn;
-    const mode = data.mode || "symbol";
     const seedNodes = new Set(data.seed_nodes || []);
-
-    const matches = new Set(
-      !p.search
-        ? []
-        : nodes.filter((n) => n.id.toLowerCase().includes(p.search) || String(n.label || "").toLowerCase().includes(p.search)).map((n) => n.id)
-    );
-
-    const incoming = [];
-    const outgoing = [];
-    const internal = [];
-    for (const e of edges) {
+    const incoming = new Set();
+    const outgoing = new Set();
+    const mode = data.mode || "symbol";
+    for (const e of (data.edges || [])) {
+      if (mode === "file" && center === "__repo__") {
+        continue;
+      }
       if (mode === "file") {
         const fromSeed = seedNodes.has(e.from);
         const toSeed = seedNodes.has(e.to);
-        if (toSeed && !fromSeed) incoming.push(e);
-        else if (fromSeed && !toSeed) outgoing.push(e);
-        else if (fromSeed && toSeed) internal.push(e);
+        if (toSeed && !fromSeed) incoming.add(e.from);
+        if (fromSeed && !toSeed) outgoing.add(e.to);
       } else {
-        if (e.to === center) incoming.push(e);
-        if (e.from === center) outgoing.push(e);
+        if (e.to === center) incoming.add(e.from);
+        if (e.from === center) outgoing.add(e.to);
       }
     }
+    return { center, incoming, outgoing };
+  }
 
-    function nodePill(nodeId) {
-      const n = byId.get(nodeId) || { id: nodeId, label: nodeId, kind: "external", clickable: false };
-      const cls = `graph-node kind-${n.kind} ${matches.has(nodeId) ? "graph-match" : ""} ${n.clickable ? "graph-clickable" : ""}`;
-      const subtitle = n.subtitle ? `<div class="path">${esc(n.subtitle)}</div>` : "";
-      return `<div class="${cls}" data-node-id="${esc(nodeId)}">
-        <div>${esc(n.label || nodeId)}</div>
-        ${subtitle}
-      </div>`;
+  function applyGraphControlsState(mode) {
+    if (graphHideBuiltinsEl) graphHideBuiltinsEl.disabled = mode === "file";
+    if (graphHideExternalEl) graphHideExternalEl.disabled = mode === "file";
+  }
+
+  function renderGraphData(data, kind) {
+    const targetKind = kind === "map" ? "map" : "graph";
+    let container = graphContainer(targetKind);
+    let tooltip = graphTooltip(targetKind);
+    const viewEl = graphViewElement(targetKind);
+    if (!viewEl) return;
+    if (!container) {
+      const canvasId = targetKind === "map" ? "map-canvas" : "graph-canvas";
+      const tooltipId = targetKind === "map" ? "map-tooltip" : "graph-tooltip";
+      viewEl.innerHTML = `<div class="graph-shell"><div class="graph-meta"></div><div id="${canvasId}" class="graph-canvas"></div><div id="${tooltipId}" class="graph-tooltip hidden"></div></div>`;
+      container = document.getElementById(canvasId);
+      tooltip = document.getElementById(tooltipId);
+    }
+    if (!container) return;
+    if (typeof window.cytoscape !== "function") {
+      viewEl.classList.add("muted");
+      viewEl.textContent = "Graph library failed to load. Refresh and try again.";
+      return;
     }
 
-    graphViewEl.classList.remove("muted");
-    graphViewEl.innerHTML = `
-      <div class="card graph-card">
-        <div class="graph-legend">
-          <span class="legend-item"><span class="dot local"></span>Local</span>
-          <span class="legend-item"><span class="dot builtin"></span>Builtins</span>
-          <span class="legend-item"><span class="dot external"></span>External</span>
-        </div>
-        <div class="section-title">${esc(graphModeLabel(mode))}</div>
-        ${mode === "file" ? `<div class="path">${esc(center)}</div>` : nodePill(center)}
-        <div class="path">${esc(graphDepthLabel(data.depth))}</div>
-        ${mode === "file" ? `<div class="path">Seed symbols found in this file: ${esc(String(seedNodes.size))}</div>` : ""}
-        ${renderGraphStats(mode, nodes, incoming.length, outgoing.length, internal.length, data.depth)}
-        ${renderGraphGuide(mode)}
-        <div class="divider"></div>
-        <div class="section-title">${esc(mode === "file" ? "What Reaches This File" : "Who Reaches This Symbol")} (${esc(String(incoming.length))})</div>
-        <div class="path">${esc(mode === "file" ? "These paths come from outside the selected file." : "These are the direct callers for the selected symbol.")}</div>
-        ${renderGraphConnections(
-          incoming,
-          (e) => `<div class="graph-connection-card">${nodePill(e.from)} <div class="path">${esc(mode === "file" ? `Reaches this file ${e.count} ${Number(e.count || 0) === 1 ? "time" : "times"}.` : `Calls this symbol ${e.count} ${Number(e.count || 0) === 1 ? "time" : "times"}.`)}</div></div>`,
-          mode === "file" ? "No outside paths reach this file in the current view." : "No symbols reach this symbol in the current view."
-        )}
-        <div class="divider"></div>
-        <div class="section-title">${esc(mode === "file" ? "What This File Reaches" : "What This Symbol Reaches")} (${esc(String(outgoing.length))})</div>
-        <div class="path">${esc(mode === "file" ? "These paths leave the selected file." : "These are the direct outgoing calls from the selected symbol.")}</div>
-        ${renderGraphConnections(
-          outgoing,
-          (e) => `<div class="graph-connection-card">${nodePill(e.to)} <div class="path">${esc(mode === "file" ? `Reached from this file ${e.count} ${Number(e.count || 0) === 1 ? "time" : "times"}.` : `Called from this symbol ${e.count} ${Number(e.count || 0) === 1 ? "time" : "times"}.`)}</div></div>`,
-          mode === "file" ? "No outgoing paths leave this file in the current view." : "This symbol does not reach any direct dependencies in the current view."
-        )}
-        ${mode === "file" ? `<div class="divider"></div><div class="section-title">What Happens Inside This File (${esc(String(internal.length))})</div><div class="path">These edges stay completely inside the selected file.</div>${renderGraphConnections(
-          internal,
-          (e) => `<div class="graph-connection-card"><div class="graph-edge-row">${nodePill(e.from)} <span class="edge-arrow">-></span> ${nodePill(e.to)}</div><div class="path">${esc(`Connected ${e.count} ${Number(e.count || 0) === 1 ? "time" : "times"} inside this file.`)}</div></div>`,
-          "No internal file edges found in the current view."
-        )}` : ""}
-        <div class="divider"></div>
-        <div class="section-title">Graph Summary</div>
-        <div class="path">Nodes: ${esc(String(nodes.length))} | Edges: ${esc(String(edges.length))} | Search matches: ${esc(String(matches.size))}</div>
-      </div>
-    `;
+    const p = graphParams();
+    const nodes = (data.nodes || []).slice();
+    const edges = (data.edges || []).slice();
+    const mode = data.mode || "symbol";
+    const { center, incoming, outgoing } = computeGraphRoles(data);
+    const matchable = p.search;
+    applyGraphControlsState(mode);
 
-    graphViewEl.querySelectorAll(".graph-node.graph-clickable").forEach((el) => {
-      el.addEventListener("click", async () => {
-        const next = el.getAttribute("data-node-id");
-        if (next) await openImpactPreview(next);
+    const filteredNodeIds = new Set(
+      nodes
+        .filter((n) => !matchable || String(n.id || "").toLowerCase().includes(matchable) || String(n.label || "").toLowerCase().includes(matchable))
+        .map((n) => n.id)
+    );
+    if (center && !matchable) filteredNodeIds.add(center);
+    const filteredEdges = edges.filter((e) => filteredNodeIds.has(e.from) && filteredNodeIds.has(e.to));
+    for (const e of filteredEdges) {
+      filteredNodeIds.add(e.from);
+      filteredNodeIds.add(e.to);
+    }
+
+    const filteredNodes = nodes.filter((n) => filteredNodeIds.has(n.id));
+    const elements = [];
+    for (const n of filteredNodes) {
+      const id = String(n.id || "");
+      const location = n.location || {};
+      const relFile = relPath(location.file || n.id || "");
+      const isCenter = mode === "file" ? (data.center === "__repo__" ? false : (new Set(data.seed_nodes || [])).has(id)) : id === center;
+      elements.push({
+        data: {
+          id,
+          label: String(n.label || id),
+          subtitle: String(n.subtitle || ""),
+          kind: String(n.kind || "external"),
+          nodeType: normalizeGraphNodeType(n, mode),
+          clickable: !!n.clickable,
+          relFile,
+          role: isCenter ? "center" : (incoming.has(id) ? "incoming" : (outgoing.has(id) ? "outgoing" : "neutral")),
+        },
       });
+    }
+    for (const e of filteredEdges) {
+      elements.push({
+        data: {
+          id: `${e.from}__${e.to}`,
+          source: e.from,
+          target: e.to,
+          count: Number(e.count || 1),
+        },
+      });
+    }
+
+    const metaEl = viewEl.querySelector(".graph-meta");
+    if (metaEl) {
+      metaEl.textContent = `${graphModeLabel(mode)} • ${graphDepthLabel(data.depth)} • ${filteredNodes.length} nodes • ${filteredEdges.length} edges`;
+    }
+
+    destroyGraphInstance(targetKind);
+    const baseConfig = {
+      container,
+      elements,
+      wheelSensitivity: 0.2,
+      style: [
+        {
+          selector: "node",
+          style: {
+            label: "data(label)",
+            "text-wrap": "wrap",
+            "text-max-width": 160,
+            "text-valign": "center",
+            "text-halign": "center",
+            "font-size": 10,
+            "background-color": "#e2e8f0",
+            "border-color": "#94a3b8",
+            "border-width": 1,
+            shape: "ellipse",
+            width: "label",
+            height: "label",
+            padding: "10px",
+            color: "#0f172a",
+          },
+        },
+        { selector: "node[nodeType = 'file']", style: { shape: "round-rectangle" } },
+        { selector: "node[nodeType = 'class']", style: { shape: "diamond" } },
+        { selector: "node[nodeType = 'function']", style: { shape: "ellipse" } },
+        { selector: "node[kind = 'local']", style: { "background-color": "#d1fae5", "border-color": "#10b981" } },
+        { selector: "node[kind = 'builtin']", style: { "background-color": "#e2e8f0", "border-color": "#94a3b8" } },
+        { selector: "node[kind = 'external']", style: { "background-color": "#f1f5f9", "border-color": "#cbd5e1" } },
+        { selector: "node[role = 'center']", style: { "background-color": "#fde68a", "border-color": "#f59e0b", "border-width": 2 } },
+        { selector: "node[role = 'incoming']", style: { "background-color": "#dbeafe", "border-color": "#3b82f6" } },
+        { selector: "node[role = 'outgoing']", style: { "background-color": "#dcfce7", "border-color": "#22c55e" } },
+        {
+          selector: "edge",
+          style: {
+            width: "mapData(count, 1, 20, 1, 5)",
+            "line-color": "#94a3b8",
+            "target-arrow-color": "#94a3b8",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            opacity: 0.8,
+          },
+        },
+      ],
+    };
+    let cy = null;
+    try {
+      cy = window.cytoscape({
+        ...baseConfig,
+        layout: {
+          name: "dagre",
+          rankDir: mode === "file" ? "LR" : "TB",
+          rankSep: 80,
+          nodeSep: 45,
+          edgeSep: 15,
+        },
+      });
+    } catch (_e) {
+      cy = window.cytoscape({
+        ...baseConfig,
+        layout: { name: "cose", animate: false },
+      });
+    }
+    if (targetKind === "map") mapCy = cy;
+    else graphCy = cy;
+    cy.fit(undefined, 40);
+
+    if (tooltip) {
+      const hideTip = () => {
+        tooltip.classList.add("hidden");
+        tooltip.textContent = "";
+      };
+      cy.on("mouseover", "node", (evt) => {
+        const n = evt.target.data();
+        const tooltipText = `${n.kind || "node"} • ${n.relFile || ""}${n.subtitle ? ` • ${n.subtitle}` : ""}`;
+        tooltip.textContent = tooltipText;
+        tooltip.classList.remove("hidden");
+      });
+      cy.on("mousemove", "node", (evt) => {
+        const original = evt.originalEvent;
+        if (!original) return;
+        const rect = container.getBoundingClientRect();
+        tooltip.style.left = `${Math.max(8, original.clientX - rect.left + 12)}px`;
+        tooltip.style.top = `${Math.max(8, original.clientY - rect.top + 12)}px`;
+      });
+      cy.on("mouseout", "node", hideTip);
+      cy.on("tap", () => hideTip());
+    }
+
+    cy.on("tap", "node", async (evt) => {
+      const n = evt.target.data();
+      if (!n || !n.id) return;
+      if (mode === "file" && data.center === "__repo__") {
+        setActiveTab("graph");
+        if (graphModeEl) graphModeEl.value = "file";
+        await loadFile(n.id);
+        await loadGraph();
+        return;
+      }
+      if (mode === "file") {
+        await loadFile(n.id);
+        return;
+      }
+      if (n.clickable) {
+        await openImpactPreview(n.id);
+      }
     });
   }
 
@@ -1501,8 +1693,8 @@
   async function loadGraph(fqn) {
     if (!graphViewEl) return;
     const p = graphParams();
-    const graphMode = p.mode === "file" ? "file" : "symbol";
-    const anchor = graphMode === "file" ? activeFilePath : (fqn || activeSymbolFqn);
+    const graphMode = p.mode === "file" ? "file" : (p.mode === "repo" ? "repo" : "symbol");
+    const anchor = graphMode === "file" ? activeFilePath : (graphMode === "repo" ? "__repo__" : (fqn || activeSymbolFqn));
     if (!anchor) {
       graphViewEl.classList.add("muted");
       graphViewEl.textContent = graphMode === "file"
@@ -1512,17 +1704,18 @@
     }
     const key = `${graphMode}|${anchor}|${p.depth}|${p.hideBuiltins}|${p.hideExternal}`;
     graphViewEl.classList.remove("muted");
-    graphViewEl.innerHTML = "<div class='card'>Loading graph...</div>";
+    const graphMeta = graphViewEl.querySelector(".graph-meta");
+    if (graphMeta) graphMeta.textContent = "Loading graph...";
     try {
       let data = graphDataCache.get(key);
       if (!data) {
         const targetParam = graphMode === "file"
           ? `file=${encodeURIComponent(anchor)}`
-          : `fqn=${encodeURIComponent(anchor)}`;
+          : (graphMode === "repo" ? "mode=file" : `fqn=${encodeURIComponent(anchor)}`);
         data = await fetchJson(`/api/graph?${targetParam}&depth=${p.depth}&hide_builtins=${p.hideBuiltins ? "true" : "false"}&hide_external=${p.hideExternal ? "true" : "false"}`);
         graphDataCache.set(key, data);
       }
-      renderGraphData(data);
+      renderGraphData(data, "graph");
     } catch (e) {
       const errCode = String((e && e.error) || "");
       if (errCode === "MISSING_ANALYSIS" || errCode === "CACHE_NOT_FOUND") {
@@ -1533,6 +1726,33 @@
       }
       graphViewEl.classList.add("muted");
       graphViewEl.textContent = redactSecrets((e && (e.error || e.message)) || "Graph unavailable.");
+    }
+  }
+
+  async function loadMap() {
+    if (!mapViewEl) return;
+    const p = graphParams();
+    const key = `repo|__repo__|${p.depth}|${p.hideBuiltins}|${p.hideExternal}`;
+    mapViewEl.classList.remove("muted");
+    const meta = mapViewEl.querySelector(".graph-meta");
+    if (meta) meta.textContent = "Loading repository map...";
+    try {
+      let data = graphDataCache.get(key);
+      if (!data) {
+        data = await fetchJson(`/api/graph?mode=file&depth=${p.depth}&hide_builtins=${p.hideBuiltins ? "true" : "false"}&hide_external=${p.hideExternal ? "true" : "false"}`);
+        graphDataCache.set(key, data);
+      }
+      renderGraphData(data, "map");
+    } catch (e) {
+      const errCode = String((e && e.error) || "");
+      if (errCode === "MISSING_ANALYSIS" || errCode === "CACHE_NOT_FOUND") {
+        mapViewEl.classList.remove("muted");
+        mapViewEl.innerHTML = renderMissingAnalysisCta("After it finishes, repository map will load automatically.");
+        bindRunAnalysisNowButton();
+        return;
+      }
+      mapViewEl.classList.add("muted");
+      mapViewEl.textContent = redactSecrets((e && (e.error || e.message)) || "Repository map unavailable.");
     }
   }
 
@@ -2933,23 +3153,51 @@
     if (tabDetailsEl) tabDetailsEl.addEventListener("click", () => setActiveTab("details"));
     if (tabImpactEl) tabImpactEl.addEventListener("click", () => setActiveTab("impact"));
     if (tabGraphEl) tabGraphEl.addEventListener("click", () => setActiveTab("graph"));
+    if (tabMapEl) tabMapEl.addEventListener("click", () => setActiveTab("map"));
     if (tabArchitectureEl) tabArchitectureEl.addEventListener("click", () => setActiveTab("architecture"));
     const rerender = () => {
       graphDataCache.clear();
       if (activeTab === "graph") loadGraph();
+      if (activeTab === "map") loadMap();
     };
     if (graphModeEl) graphModeEl.addEventListener("change", rerender);
     if (graphDepthEl) graphDepthEl.addEventListener("change", rerender);
     if (graphHideBuiltinsEl) graphHideBuiltinsEl.addEventListener("change", rerender);
     if (graphHideExternalEl) graphHideExternalEl.addEventListener("change", rerender);
     if (graphSearchEl) graphSearchEl.addEventListener("input", () => {
-      if (activeTab === "graph") {
+      if (activeTab === "graph" || activeTab === "map") {
         const p = graphParams();
-        const graphMode = p.mode === "file" ? "file" : "symbol";
-        const anchor = graphMode === "file" ? activeFilePath : activeSymbolFqn;
+        const graphMode = activeTab === "map" ? "repo" : (p.mode === "file" ? "file" : (p.mode === "repo" ? "repo" : "symbol"));
+        const anchor = graphMode === "file" ? activeFilePath : (graphMode === "repo" ? "__repo__" : activeSymbolFqn);
         const key = `${graphMode}|${anchor}|${p.depth}|${p.hideBuiltins}|${p.hideExternal}`;
         const cached = graphDataCache.get(key);
-        if (cached) renderGraphData(cached);
+        if (cached) renderGraphData(cached, activeTab === "map" ? "map" : "graph");
+      }
+    });
+    if (graphZoomInEl) graphZoomInEl.addEventListener("click", () => {
+      const cy = activeGraphInstance();
+      if (cy) cy.zoom(cy.zoom() * 1.15);
+    });
+    if (graphZoomOutEl) graphZoomOutEl.addEventListener("click", () => {
+      const cy = activeGraphInstance();
+      if (cy) cy.zoom(cy.zoom() / 1.15);
+    });
+    if (graphFitEl) graphFitEl.addEventListener("click", () => {
+      const cy = activeGraphInstance();
+      if (cy) cy.fit(undefined, 40);
+    });
+    if (graphResetEl) graphResetEl.addEventListener("click", () => {
+      graphDataCache.clear();
+      if (activeTab === "map") loadMap();
+      else if (activeTab === "graph") loadGraph();
+    });
+    if (graphFullscreenEl) graphFullscreenEl.addEventListener("click", async () => {
+      const container = activeTab === "map" ? document.getElementById("map-canvas") : document.getElementById("graph-canvas");
+      if (!container) return;
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (container.requestFullscreen) {
+        await container.requestFullscreen();
       }
     });
     const rerenderImpact = () => {
@@ -3170,6 +3418,7 @@
     // Allow graph and impact tabs to be reloaded for the new symbol
     // (Keep details: true since we're loading it now)
     tabsLoaded.graph = false;
+    tabsLoaded.map = false;
     tabsLoaded.impact = false;
     
     showSymbolLoading();
@@ -3271,6 +3520,8 @@
 
   async function refreshForActiveRepo() {
     clearWorkspaceView("Loading workspace...");
+    destroyGraphInstance("graph");
+    destroyGraphInstance("map");
     architectureCache = null;
     symbolAiSummaryCache.clear();
     repoSummary = null;
@@ -3286,6 +3537,7 @@
     tabsLoaded = {
       details: true,
       graph: false,
+      map: false,
       impact: false,
       architecture: false
     };
@@ -3325,4 +3577,3 @@
 
   init();
 })();
-

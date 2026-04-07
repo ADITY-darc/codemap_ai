@@ -2039,6 +2039,7 @@ def api_search(
 def api_graph(
     fqn: Optional[str] = Query(default=None),
     file: Optional[str] = Query(default=None),
+    mode: Optional[str] = Query(default=None),
     depth: int = Query(default=1, ge=1, le=3),
     hide_builtins: bool = Query(default=True),
     hide_external: bool = Query(default=True),
@@ -2056,8 +2057,58 @@ def api_graph(
     callers_map = graph["callers_map"]
     edge_counts = graph["edge_counts"]
 
+    requested_mode = str(mode or "").strip().lower()
     center_fqn = fqn.strip() if isinstance(fqn, str) else ""
     file_rel = file.replace("\\", "/").lstrip("/") if isinstance(file, str) else ""
+    if requested_mode == "file" and not center_fqn and not file_rel:
+        repo_data = _load_repo_data(ctx)
+        resolved_calls = repo_data.get("resolved_calls", [])
+        fqn_to_file: Dict[str, str] = {}
+        for sym_fqn, item in explain.items():
+            loc_file = (item.get("location") or {}).get("file", "")
+            rel_file = _rel_file(ctx, loc_file)
+            if rel_file:
+                fqn_to_file[sym_fqn] = rel_file
+
+        file_edge_counts: Dict[tuple, int] = {}
+        for call in resolved_calls:
+            caller_file = _rel_file(ctx, call.get("file", ""))
+            if not caller_file:
+                continue
+            callee_fqn = call.get("callee_fqn")
+            callee_file = fqn_to_file.get(callee_fqn or "", "")
+            if not callee_file:
+                continue
+            edge_key = (caller_file, callee_file)
+            file_edge_counts[edge_key] = file_edge_counts.get(edge_key, 0) + 1
+
+        file_nodes = sorted({src for src, _ in file_edge_counts.keys()} | {dst for _, dst in file_edge_counts.keys()})
+        nodes = []
+        for rel_file in file_nodes:
+            nodes.append(
+                {
+                    "id": rel_file,
+                    "label": os.path.basename(rel_file) or rel_file,
+                    "subtitle": rel_file,
+                    "kind": "local",
+                    "clickable": True,
+                    "location": {"file": rel_file},
+                }
+            )
+        edges_payload = [
+            {"from": src, "to": dst, "count": int(count)}
+            for (src, dst), count in sorted(file_edge_counts.items(), key=lambda x: (x[0][0], x[0][1]))
+        ]
+        return {
+            "ok": True,
+            "mode": "file",
+            "center": "__repo__",
+            "depth": depth,
+            "seed_nodes": [],
+            "nodes": nodes,
+            "edges": edges_payload,
+        }
+
     if not center_fqn and not file_rel:
         return JSONResponse(status_code=400, content={"ok": False, "error": "MISSING_GRAPH_TARGET"})
 
