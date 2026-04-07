@@ -563,6 +563,38 @@
     };
   }
 
+  function graphModeFromValue(modeValue) {
+    if (modeValue === "file") return "file";
+    if (modeValue === "repo") return "repo";
+    return "symbol";
+  }
+
+  function graphModeForTab(modeValue, tabValue) {
+    if (tabValue === "map") return "repo";
+    return graphModeFromValue(modeValue);
+  }
+
+  function graphAnchorForMode(mode, symbolFqn) {
+    if (mode === "file") return activeFilePath;
+    if (mode === "repo") return "__repo__";
+    return symbolFqn || activeSymbolFqn;
+  }
+
+  function nodeRole(isCenter, incomingSet, outgoingSet, nodeId) {
+    if (isCenter) return "center";
+    if (incomingSet.has(nodeId)) return "incoming";
+    if (outgoingSet.has(nodeId)) return "outgoing";
+    return "neutral";
+  }
+
+  function isCenterNode(mode, isRepoCenter, seedNodes, nodeId, centerId) {
+    if (mode === "file") {
+      if (isRepoCenter) return false;
+      return seedNodes.has(nodeId);
+    }
+    return nodeId === centerId;
+  }
+
   async function prefetchSymbolTabData(fqn) {
     const anchor = String(fqn || activeSymbolFqn || "").trim();
     if (!anchor) return;
@@ -1206,10 +1238,11 @@
     const incoming = new Set();
     const outgoing = new Set();
     const mode = data.mode || "symbol";
+    if (mode === "file" && center === "__repo__") {
+      // Repo-wide file map has no single center node, so incoming/outgoing role buckets are intentionally empty.
+      return { center, incoming, outgoing };
+    }
     for (const e of (data.edges || [])) {
-      if (mode === "file" && center === "__repo__") {
-        continue;
-      }
       if (mode === "file") {
         const fromSeed = seedNodes.has(e.from);
         const toSeed = seedNodes.has(e.to);
@@ -1244,7 +1277,7 @@
     if (!container) return;
     if (typeof window.cytoscape !== "function") {
       viewEl.classList.add("muted");
-      viewEl.textContent = "Graph library failed to load. Refresh and try again.";
+      viewEl.textContent = "Graph library failed to load. Check internet/CDN access for Cytoscape, inspect browser console errors, then refresh.";
       return;
     }
 
@@ -1253,6 +1286,8 @@
     const edges = (data.edges || []).slice();
     const mode = data.mode || "symbol";
     const { center, incoming, outgoing } = computeGraphRoles(data);
+    const seedNodes = new Set(data.seed_nodes || []);
+    const isRepoCenter = mode === "file" && data.center === "__repo__";
     const matchable = p.search;
     applyGraphControlsState(mode);
 
@@ -1274,7 +1309,7 @@
       const id = String(n.id || "");
       const location = n.location || {};
       const relFile = relPath(location.file || n.id || "");
-      const isCenter = mode === "file" ? (data.center === "__repo__" ? false : (new Set(data.seed_nodes || [])).has(id)) : id === center;
+      const isCenter = isCenterNode(mode, isRepoCenter, seedNodes, id, center);
       elements.push({
         data: {
           id,
@@ -1284,7 +1319,7 @@
           nodeType: normalizeGraphNodeType(n, mode),
           clickable: !!n.clickable,
           relFile,
-          role: isCenter ? "center" : (incoming.has(id) ? "incoming" : (outgoing.has(id) ? "outgoing" : "neutral")),
+          role: nodeRole(isCenter, incoming, outgoing, id),
         },
       });
     }
@@ -1363,7 +1398,9 @@
           edgeSep: 15,
         },
       });
-    } catch (_e) {
+    } catch (e) {
+      // Fallback to built-in layout when dagre plugin is unavailable or CDN loading fails.
+      console.warn("Cytoscape dagre layout unavailable; falling back to cose layout.", e);
       cy = window.cytoscape({
         ...baseConfig,
         layout: { name: "cose", animate: false },
@@ -1693,8 +1730,8 @@
   async function loadGraph(fqn) {
     if (!graphViewEl) return;
     const p = graphParams();
-    const graphMode = p.mode === "file" ? "file" : (p.mode === "repo" ? "repo" : "symbol");
-    const anchor = graphMode === "file" ? activeFilePath : (graphMode === "repo" ? "__repo__" : (fqn || activeSymbolFqn));
+    const graphMode = graphModeFromValue(p.mode);
+    const anchor = graphAnchorForMode(graphMode, fqn || activeSymbolFqn);
     if (!anchor) {
       graphViewEl.classList.add("muted");
       graphViewEl.textContent = graphMode === "file"
@@ -3167,8 +3204,8 @@
     if (graphSearchEl) graphSearchEl.addEventListener("input", () => {
       if (activeTab === "graph" || activeTab === "map") {
         const p = graphParams();
-        const graphMode = activeTab === "map" ? "repo" : (p.mode === "file" ? "file" : (p.mode === "repo" ? "repo" : "symbol"));
-        const anchor = graphMode === "file" ? activeFilePath : (graphMode === "repo" ? "__repo__" : activeSymbolFqn);
+        const graphMode = graphModeForTab(p.mode, activeTab);
+        const anchor = graphAnchorForMode(graphMode, activeSymbolFqn);
         const key = `${graphMode}|${anchor}|${p.depth}|${p.hideBuiltins}|${p.hideExternal}`;
         const cached = graphDataCache.get(key);
         if (cached) renderGraphData(cached, activeTab === "map" ? "map" : "graph");
